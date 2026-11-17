@@ -20,6 +20,10 @@ object Dates {
     fun full(epochDay: Long, locale: Locale = Locale.getDefault()): String =
         LocalDate.ofEpochDay(epochDay).format(formatter("EEE, d MMM yyyy", locale))
 
+    /** "16 Nov 2026" */
+    fun short(epochDay: Long, locale: Locale = Locale.getDefault()): String =
+        LocalDate.ofEpochDay(epochDay).format(formatter("d MMM yyyy", locale))
+
     /**
      * Heading for one day in a list: "Today · Mon, 16 Nov", "Yesterday · Sun, 15 Nov",
      * otherwise just the date. The year is added when it is not the current year.

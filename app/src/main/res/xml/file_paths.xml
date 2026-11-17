@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The only folder other apps can be handed files from: attached documents
+     (to view one, or for the camera to save a new photo into). -->
+<paths>
+    <files-path name="attachments" path="attachments/" />
+</paths>

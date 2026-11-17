@@ -3,12 +3,14 @@ package io.github.abhimanuearya1.expensetracker
 import android.app.Application
 import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
+import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.abhimanuearya1.expensetracker.core.Categories
 import io.github.abhimanuearya1.expensetracker.core.MoneyFormatter
 import io.github.abhimanuearya1.expensetracker.data.AppDatabase
+import io.github.abhimanuearya1.expensetracker.data.AttachmentStore
 import io.github.abhimanuearya1.expensetracker.data.ExpenseRepository
 import io.github.abhimanuearya1.expensetracker.ui.ExpenseViewModel
 import kotlinx.coroutines.flow.first
@@ -158,6 +160,147 @@ class DatabaseTest {
             val second = repo.importCsv(csv)
             assertEquals(0, second.added)
             assertEquals(3, second.alreadyPresent)
+            assertEquals(3, repo.observeAll().first().size)
+        }
+    }
+}
+
+/** Things added in app 2.1: payment methods, attachments, statement import, and upgrading a 2.0 database. */
+@RunWith(AndroidJUnit4::class)
+class Version21Test {
+
+    private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Before
+    fun setUp() {
+        AppDatabase.reset(context)
+    }
+
+    @After
+    fun tearDown() {
+        AppDatabase.reset(context)
+    }
+
+    @Test
+    fun aDatabaseFromVersion20IsUpgradedWithoutLosingAnything() {
+        // Build the database exactly as app 2.0 created it, with one classification and two expenses.
+        val path = context.getDatabasePath(AppDatabase.FILE_NAME)
+        path.parentFile?.mkdirs()
+        SQLiteDatabase.openOrCreateDatabase(path, null).use { old ->
+            old.execSQL("CREATE TABLE `categories` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL COLLATE NOCASE, `color` INTEGER NOT NULL)")
+            old.execSQL("CREATE UNIQUE INDEX `index_categories_name` ON `categories` (`name`)")
+            old.execSQL(
+                "CREATE TABLE `expenses` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `amountCents` INTEGER NOT NULL, " +
+                    "`epochDay` INTEGER NOT NULL, `categoryId` INTEGER, `details` TEXT NOT NULL, " +
+                    "FOREIGN KEY(`categoryId`) REFERENCES `categories`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )"
+            )
+            old.execSQL("CREATE INDEX `index_expenses_categoryId` ON `expenses` (`categoryId`)")
+            old.execSQL("CREATE INDEX `index_expenses_epochDay` ON `expenses` (`epochDay`)")
+            old.execSQL("INSERT INTO categories (id, name, color) VALUES (1, 'Food', -1)")
+            old.execSQL("INSERT INTO expenses (amountCents, epochDay, categoryId, details) VALUES (25000, ${day("2026-11-16")}, 1, 'Lunch')")
+            old.execSQL("INSERT INTO expenses (amountCents, epochDay, categoryId, details) VALUES (4000, ${day("2026-11-15")}, NULL, 'Bus')")
+            old.version = 1
+        }
+
+        // Opening it with the current app runs the upgrade; Room then checks every table matches.
+        runBlocking {
+            val repo = ExpenseRepository(AppDatabase.get(context))
+            val all = repo.observeAll().first()
+            assertEquals(listOf("Lunch", "Bus"), all.map { it.details })
+            assertEquals(listOf(25000L, 4000L), all.map { it.amountCents })
+            assertEquals(listOf("Food", null), all.map { it.categoryName })
+            assertEquals(listOf(null, null), all.map { it.paymentMethodName })
+            assertEquals(listOf(0, 0), all.map { it.attachmentCount })
+            // The new payment-method list arrives with its defaults and is usable straight away.
+            val methods = AppDatabase.get(context).paymentMethodDao().getAll()
+            assertEquals(Categories.DEFAULT_PAYMENT_METHODS.map { it.name }.sortedBy { it.lowercase() }, methods.map { it.name })
+            repo.saveExpense(all[0].id, 25000, all[0].epochDay, 1, "Lunch", methods.first { it.name == "UPI" }.id)
+            assertEquals("UPI", repo.observeAll().first()[0].paymentMethodName)
+        }
+    }
+
+    @Test
+    fun paymentMethodIsStoredAndSurvivesItsDeletionAsNotSet() {
+        runBlocking {
+            val db = AppDatabase.get(context)
+            val repo = ExpenseRepository(db)
+            val cash = db.paymentMethodDao().getAll().single { it.name == "Cash" }.id
+            repo.saveExpense(null, 500, day("2026-11-16"), null, "Tea", cash)
+            assertEquals("Cash", repo.observeAll().first().single().paymentMethodName)
+            assertEquals(1, repo.observePaymentMethods().first().single { it.id == cash }.expenseCount)
+
+            repo.deletePaymentMethod(cash)
+            val item = repo.observeAll().first().single()
+            assertEquals("Tea", item.details)
+            assertNull(item.paymentMethodId)
+        }
+    }
+
+    @Test
+    fun documentsCanBeAttachedReplacedAndAreRemovedWithTheExpense() {
+        runBlocking {
+            val repo = ExpenseRepository(AppDatabase.get(context))
+            val store = AttachmentStore(context)
+            val source = File(context.cacheDir, "receipt.pdf").apply { writeText("pretend this is a PDF") }
+
+            // Attach a copy of a file to a new expense.
+            val first = store.copyIn(Uri.fromFile(source))
+            assertEquals("receipt.pdf", first.displayName)
+            assertTrue(first.fileName.endsWith(".pdf"))
+            assertTrue(store.exists(first.fileName))
+            source.delete() // the app keeps its own copy
+            repo.saveExpense(null, 100, day("2026-11-16"), null, "With receipt", null, listOf(first))
+
+            val expense = repo.observeAll().first().single()
+            assertEquals(1, expense.attachmentCount)
+            val saved = repo.attachmentsOf(expense.id)
+            assertEquals(listOf("receipt.pdf"), saved.map { it.displayName })
+            assertEquals("pretend this is a PDF", context.contentResolver.openInputStream(store.uriFor(saved[0].fileName))!!.use { it.readBytes().decodeToString() })
+
+            // Saving with an empty list detaches it and reports the file to delete.
+            val removed = repo.saveExpense(expense.id, 100, expense.epochDay, null, "With receipt", null, emptyList())
+            assertEquals(listOf(first.fileName), removed)
+            assertEquals(0, repo.observeAll().first().single().attachmentCount)
+
+            // Saving without mentioning attachments leaves them alone; deleting the expense reports its files.
+            val second = store.copyIn(Uri.fromFile(File(context.cacheDir, "photo.jpg").apply { writeText("jpg") }))
+            repo.saveExpense(expense.id, 100, expense.epochDay, null, "With photo", null, listOf(second))
+            repo.saveExpense(expense.id, 200, expense.epochDay, null, "With photo")
+            assertEquals(1, repo.observeAll().first().single().attachmentCount)
+            assertEquals(listOf(second.fileName), repo.deleteExpense(expense.id))
+            assertTrue(repo.allAttachmentFileNames().isEmpty())
+            store.delete(first.fileName)
+            store.delete(second.fileName)
+        }
+    }
+
+    @Test
+    fun phonePeStatementImportsAsUnclassifiedWithPaymentMethodFromInstrument() {
+        val statement = "Transaction Statement for 9000000000\n" +
+            "Duration,\"18 Oct, 2026 - 17 Nov, 2026\"\n\n" +
+            "Date,Time,Transaction Details,Transaction ID,UTR,Transaction Type,Credit/debit instrument,Amount\n" +
+            "\"Nov 16, 2026\",\"08:01 am\",\"Payment to Example Store\",\"T1\",\"1\",\"DEBIT\",\"Paid by XXXXXXXXXX1234\",\"689\"\n" +
+            "\"Nov 15, 2026\",\"07:05 pm\",\"Paid to City hospital\",\"T2\",\"2\",\"DEBIT\",\"Paid by XX9999\",\"2245.76\"\n" +
+            "\"Nov 15, 2026\",\"06:00 pm\",\"Received from A Friend\",\"T3\",\"3\",\"CREDIT\",\"Credited to XXXXXXXXXX1234\",\"500\"\n" +
+            "\"Nov 14, 2026\",\"06:00 pm\",\"Paid to Cafe\",\"T4\",\"4\",\"DEBIT\",\"Paid by XXXXXXXXXX1234\",\"190\"\n\n" +
+            "This is an automatically generated statement. Customer(s) are requested to immediately notify PhonePe in case\n"
+        runBlocking {
+            val repo = ExpenseRepository(AppDatabase.get(context))
+            val outcome = repo.importCsv(statement)
+            assertEquals(3, outcome.added)
+            assertEquals(0, outcome.unreadable)
+
+            val all = repo.observeAll().first()
+            assertEquals(listOf(68900L, 224576L, 19000L), all.map { it.amountCents })
+            assertEquals(listOf("2026-11-16", "2026-11-15", "2026-11-14").map(::day), all.map { it.epochDay })
+            assertEquals(listOf("XXXXXXXXXX1234", "XX9999", "XXXXXXXXXX1234"), all.map { it.paymentMethodName })
+            assertTrue(all.all { it.categoryId == null })
+            assertEquals(2, repo.observePaymentMethods().first().single { it.name == "XXXXXXXXXX1234" }.expenseCount)
+
+            // Classify one, then import the statement again: nothing is duplicated.
+            val food = AppDatabase.get(context).categoryDao().getAll().single { it.name == "Food" }.id
+            repo.saveExpense(all[2].id, all[2].amountCents, all[2].epochDay, food, all[2].details, all[2].paymentMethodId)
+            assertEquals(0, repo.importCsv(statement).added)
             assertEquals(3, repo.observeAll().first().size)
         }
     }

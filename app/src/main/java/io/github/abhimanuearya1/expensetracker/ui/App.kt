@@ -58,7 +58,7 @@ import java.time.LocalDate
 enum class MainTab(val title: String) {
     Expenses("Expenses"),
     Summary("Summary"),
-    Classifications("Classifications"),
+    Lists("Lists"),
 }
 
 private sealed interface CategoryDialogTarget {
@@ -71,6 +71,7 @@ private sealed interface CategoryDialogTarget {
 fun ExpenseTrackerApp(viewModel: ExpenseViewModel = viewModel()) {
     val currencyCode by viewModel.currencyCode.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val paymentMethods by viewModel.paymentMethods.collectAsStateWithLifecycle()
     val locale = LocalConfiguration.current.locales[0]
     val money = remember(currencyCode, locale) { MoneyFormatter(currencyCode, locale) }
 
@@ -84,15 +85,14 @@ fun ExpenseTrackerApp(viewModel: ExpenseViewModel = viewModel()) {
             EditExpenseScreen(
                 editing = editing,
                 categories = categories.orEmpty(),
-                onSave = viewModel::saveExpense,
-                onDelete = viewModel::deleteExpense,
-                onClose = viewModel::closeEditor,
-                onAddCategory = viewModel::addCategory,
+                paymentMethods = paymentMethods.orEmpty(),
+                viewModel = viewModel,
             )
         } else {
             MainScreen(
                 viewModel = viewModel,
                 categories = categories,
+                paymentMethods = paymentMethods,
                 currencyCode = currencyCode,
                 tab = tab,
                 onTabChange = { tab = it },
@@ -106,6 +106,7 @@ fun ExpenseTrackerApp(viewModel: ExpenseViewModel = viewModel()) {
 private fun MainScreen(
     viewModel: ExpenseViewModel,
     categories: List<CategoryWithCount>?,
+    paymentMethods: List<CategoryWithCount>?,
     currencyCode: String?,
     tab: MainTab,
     onTabChange: (MainTab) -> Unit,
@@ -124,6 +125,10 @@ private fun MainScreen(
     var showCurrency by rememberSaveable { mutableStateOf(false) }
     var categoryDialog by remember { mutableStateOf<CategoryDialogTarget?>(null) }
     var deleteTarget by remember { mutableStateOf<CategoryWithCount?>(null) }
+    // Which of the two lists the Lists tab shows and its dialogs act on.
+    var showPaymentMethods by rememberSaveable { mutableStateOf(false) }
+    val listEntries = if (showPaymentMethods) paymentMethods else categories
+    val listNoun = if (showPaymentMethods) "payment method" else "classification"
 
     // The system file picker is used, so the app needs no storage permission.
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
@@ -213,17 +218,17 @@ private fun MainScreen(
                         modifier = Modifier.testTag("tab-Summary"),
                     )
                     NavigationBarItem(
-                        selected = tab == MainTab.Classifications,
-                        onClick = { onTabChange(MainTab.Classifications) },
+                        selected = tab == MainTab.Lists,
+                        onClick = { onTabChange(MainTab.Lists) },
                         icon = { Icon(AppIcons.Label, contentDescription = null) },
-                        label = { Text(MainTab.Classifications.title) },
-                        modifier = Modifier.testTag("tab-Classifications"),
+                        label = { Text(MainTab.Lists.title) },
+                        modifier = Modifier.testTag("tab-Lists"),
                     )
                 }
             }
         },
         floatingActionButton = {
-            if (!searching && tab != MainTab.Classifications) {
+            if (!searching && tab != MainTab.Lists) {
                 ExtendedFloatingActionButton(
                     text = { Text("Add expense") },
                     icon = { Icon(AppIcons.Add, contentDescription = null) },
@@ -257,6 +262,9 @@ private fun MainScreen(
                 onPreviousMonth = viewModel::previousMonth,
                 onNextMonth = viewModel::nextMonth,
                 onCurrentMonth = viewModel::goToCurrentMonth,
+                onCustomRange = viewModel::setSummaryCustomRange,
+                onFromDay = viewModel::setSummaryFrom,
+                onToDay = viewModel::setSummaryTo,
                 onOpenCategory = { categoryId ->
                     viewModel.showCategory(categoryId)
                     onTabChange(MainTab.Expenses)
@@ -264,8 +272,10 @@ private fun MainScreen(
                 modifier = Modifier.padding(padding),
             )
 
-            MainTab.Classifications -> ClassificationsTab(
-                categories = categories,
+            MainTab.Lists -> ListsTab(
+                showPaymentMethods = showPaymentMethods,
+                onShowPaymentMethods = { showPaymentMethods = it },
+                entries = listEntries,
                 onAdd = { categoryDialog = CategoryDialogTarget.New },
                 onEdit = { categoryDialog = CategoryDialogTarget.Edit(it) },
                 onDelete = { deleteTarget = it },
@@ -287,30 +297,34 @@ private fun MainScreen(
 
     val dialogTarget = categoryDialog
     if (dialogTarget != null) {
-        val all = categories.orEmpty()
+        val all = listEntries.orEmpty()
         when (dialogTarget) {
             is CategoryDialogTarget.New -> CategoryDialog(
-                title = "New classification",
+                title = "New $listNoun",
                 initialName = "",
                 initialColor = Categories.nextColor(all.map { it.color }),
                 existingNames = all.map { it.name },
                 renamingFrom = null,
                 onDismiss = { categoryDialog = null },
                 onSave = { name, color ->
-                    viewModel.addCategory(name, color)
+                    if (showPaymentMethods) viewModel.addPaymentMethod(name, color) else viewModel.addCategory(name, color)
                     categoryDialog = null
                 },
             )
 
             is CategoryDialogTarget.Edit -> CategoryDialog(
-                title = "Edit classification",
+                title = "Edit $listNoun",
                 initialName = dialogTarget.category.name,
                 initialColor = dialogTarget.category.color,
                 existingNames = all.map { it.name },
                 renamingFrom = dialogTarget.category.name,
                 onDismiss = { categoryDialog = null },
                 onSave = { name, color ->
-                    viewModel.updateCategory(dialogTarget.category.id, name, color)
+                    if (showPaymentMethods) {
+                        viewModel.updatePaymentMethod(dialogTarget.category.id, name, color)
+                    } else {
+                        viewModel.updateCategory(dialogTarget.category.id, name, color)
+                    }
                     categoryDialog = null
                 },
             )
@@ -319,17 +333,18 @@ private fun MainScreen(
 
     val toDelete = deleteTarget
     if (toDelete != null) {
+        val kept = if (showPaymentMethods) "without a payment method" else "shown as “${Categories.UNCATEGORIZED}”"
         ConfirmDialog(
             title = "Delete “${toDelete.name}”?",
             text = when (toDelete.expenseCount) {
-                0 -> "No expenses use this classification."
-                1 -> "1 expense uses this classification. It will be kept and shown as “${Categories.UNCATEGORIZED}”."
+                0 -> "No expenses use this $listNoun."
+                1 -> "1 expense uses this $listNoun. It will be kept, $kept."
                 else -> TextTools.plural(toDelete.expenseCount, "expense") +
-                    " use this classification. They will be kept and shown as “${Categories.UNCATEGORIZED}”."
+                    " use this $listNoun. They will be kept, $kept."
             },
             confirmLabel = "Delete",
             onConfirm = {
-                viewModel.deleteCategory(toDelete)
+                if (showPaymentMethods) viewModel.deletePaymentMethod(toDelete) else viewModel.deleteCategory(toDelete)
                 deleteTarget = null
             },
             onDismiss = { deleteTarget = null },

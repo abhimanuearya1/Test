@@ -10,6 +10,8 @@ data class BackupRow(
     val classification: String,
     val amountCents: Long,
     val details: String,
+    /** Payment method name; empty means none. */
+    val paymentMethod: String = "",
 )
 
 data class ParsedBackup(
@@ -39,17 +41,24 @@ data class ImportOutcome(
 }
 
 /**
- * The export/import file format. One line per expense:
+ * Reading and writing expenses as CSV.
  *
- *     Date,Classification,Amount,Details
- *     2026-11-16,Food,250.00,Lunch at cafe
+ * The app's own format, one line per expense:
  *
- * The same file opens directly in Excel / Google Sheets and can be imported back
- * into the app, so it doubles as the backup format.
+ *     Date,Classification,Amount,Details,Payment Method
+ *     2026-11-16,Food,250.00,Lunch at cafe,UPI
+ *
+ * It opens directly in Excel / Google Sheets and can be imported back, so it
+ * doubles as the backup format (attached documents are not part of it).
+ *
+ * Import also understands a PhonePe transaction statement saved as CSV: the
+ * amount, date and details are taken from it, the "Credit/debit instrument"
+ * becomes the payment method, and the expenses arrive without a classification.
+ * Money received (CREDIT lines) is left out.
  */
 object CsvBackup {
 
-    val HEADER = listOf("Date", "Classification", "Amount", "Details")
+    val HEADER = listOf("Date", "Classification", "Amount", "Details", "Payment Method")
 
     fun export(rows: List<BackupRow>): String {
         val sb = StringBuilder()
@@ -62,6 +71,7 @@ object CsvBackup {
                         r.classification,
                         Money.toPlainString(r.amountCents),
                         r.details,
+                        r.paymentMethod,
                     )
                 )
             ).append("\r\n")
@@ -69,46 +79,82 @@ object CsvBackup {
         return sb.toString()
     }
 
+    private val CLASSIFICATION_HEADERS = setOf("classification", "category")
+    private val DETAILS_HEADERS = setOf("details", "description", "notes", "note", "transaction details")
+    private val PAYMENT_HEADERS = setOf("payment method", "credit/debit instrument", "instrument", "paid by")
+    private val TYPE_HEADERS = setOf("transaction type", "type")
+
+    /** Bank and wallet statements start with a few title lines, so the column names are looked for this far down. */
+    private const val HEADER_SEARCH_ROWS = 20
+
     fun parse(text: String): ParsedBackup {
         val table = Csv.parse(text)
         if (table.isEmpty()) return ParsedBackup(emptyList(), 0)
 
+        // Without column names the app's own order is assumed.
         var dateCol = 0
         var classCol = 1
         var amountCol = 2
         var detailsCol = 3
+        var paymentCol = 4
+        var typeCol = -1
         var firstDataRow = 0
 
-        // If the first line names its columns, follow those names so that files
-        // with re-ordered or extra columns still import.
-        val header = table[0].map { it.trim().lowercase() }
-        val namedDate = header.indexOf("date")
-        val namedAmount = header.indexOf("amount")
-        if (namedDate >= 0 && namedAmount >= 0) {
-            dateCol = namedDate
-            amountCol = namedAmount
-            classCol = header.indexOfFirst { it == "classification" || it == "category" }
-            detailsCol = header.indexOfFirst { it == "details" || it == "description" || it == "notes" || it == "note" }
-            firstDataRow = 1
+        // If a line names its columns, follow those names so that files with
+        // re-ordered or extra columns still import.
+        for (i in 0 until minOf(table.size, HEADER_SEARCH_ROWS)) {
+            val header = table[i].map { it.trim().lowercase() }
+            val namedDate = header.indexOf("date")
+            val namedAmount = header.indexOf("amount")
+            if (namedDate >= 0 && namedAmount >= 0) {
+                dateCol = namedDate
+                amountCol = namedAmount
+                classCol = header.indexOfFirst { it in CLASSIFICATION_HEADERS }
+                detailsCol = header.indexOfFirst { it in DETAILS_HEADERS }
+                paymentCol = header.indexOfFirst { it in PAYMENT_HEADERS }
+                typeCol = header.indexOfFirst { it in TYPE_HEADERS }
+                firstDataRow = i + 1
+                break
+            }
         }
+        // Shorter lines are titles or footnotes, not transactions.
+        val cellsNeeded = maxOf(dateCol, amountCol) + 1
 
         val rows = ArrayList<BackupRow>()
         var unreadable = 0
         for (i in firstDataRow until table.size) {
             val line = table[i]
+            if (line.size < cellsNeeded) continue
+            // Statements list money received as well; only money spent is an expense.
+            val type = line.getOrNull(typeCol)?.trim()?.lowercase().orEmpty()
+            if (type == "credit" || type == "cr") continue
+
             val day = parseDate(line.getOrNull(dateCol))
             val cents = parseAmount(line.getOrNull(amountCol))
             if (day == null || cents == null || cents <= 0) {
                 unreadable++
                 continue
             }
-            var classification = Categories.cleanName(line.getOrNull(classCol).orEmpty())
-                .take(Categories.MAX_NAME_LENGTH).trim()
+            var classification = cleanName(line.getOrNull(classCol))
             if (classification.equals(Categories.UNCATEGORIZED, ignoreCase = true)) classification = ""
-            rows.add(BackupRow(day, classification, cents, line.getOrNull(detailsCol).orEmpty().trim()))
+            rows.add(
+                BackupRow(
+                    epochDay = day,
+                    classification = classification,
+                    amountCents = cents,
+                    details = line.getOrNull(detailsCol).orEmpty().trim(),
+                    paymentMethod = cleanName(line.getOrNull(paymentCol)?.trim()?.removePrefixIgnoreCase("Paid by")),
+                )
+            )
         }
         return ParsedBackup(rows, unreadable)
     }
+
+    private fun cleanName(raw: String?): String =
+        Categories.cleanName(raw.orEmpty()).take(Categories.MAX_NAME_LENGTH).trim()
+
+    private fun String.removePrefixIgnoreCase(prefix: String): String =
+        if (startsWith(prefix, ignoreCase = true)) substring(prefix.length) else this
 
     /**
      * Rows of [incoming] that are not already in [existing], so importing the same
@@ -130,16 +176,21 @@ object CsvBackup {
         return result
     }
 
-    private fun key(r: BackupRow) =
-        r.copy(classification = r.classification.trim().lowercase(), details = r.details.trim())
+    // Classification and payment method are left out on purpose: they are what
+    // people change after importing, and that must not make the same
+    // transaction import a second time.
+    private fun key(r: BackupRow) = r.copy(classification = "", paymentMethod = "", details = r.details.trim())
 
     private val ISO_DATE = Regex("""^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(\D.*)?$""")
     private val DAY_FIRST_DATE = Regex("""^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(\D.*)?$""")
+    private val MONTH_NAME_FIRST = Regex("""^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})(\D.*)?$""")
+    private val DAY_THEN_MONTH_NAME = Regex("""^(\d{1,2})[\s-]+([A-Za-z]{3,9})\.?,?[\s-]+(\d{4})(\D.*)?$""")
+    private val MONTHS = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 
     /**
-     * Reads 2026-11-16 (what the app writes) and also 16-11-2026 / 16/11/2026,
-     * which is what a spreadsheet may turn the date into when the file is edited
-     * and saved again. Returns the epoch day, or null.
+     * Reads 2026-11-16 (what the app writes), 16-11-2026 / 16/11/2026 (what a
+     * spreadsheet may turn it into), and dates with a month name such as
+     * "Nov 16, 2026" or "16 Nov 2026" (statements). Returns the epoch day, or null.
      */
     fun parseDate(raw: String?): Long? {
         val s = raw?.trim().orEmpty()
@@ -154,7 +205,20 @@ object CsvBackup {
             // Day first, unless that is impossible and month-first works (11/16/2026).
             return if (b > 12 && a <= 12) toEpochDay(year, a, b) else toEpochDay(year, b, a)
         }
+        MONTH_NAME_FIRST.find(s)?.let { m ->
+            val month = monthNumber(m.groupValues[1]) ?: return null
+            return toEpochDay(m.groupValues[3].toInt(), month, m.groupValues[2].toInt())
+        }
+        DAY_THEN_MONTH_NAME.find(s)?.let { m ->
+            val month = monthNumber(m.groupValues[2]) ?: return null
+            return toEpochDay(m.groupValues[3].toInt(), month, m.groupValues[1].toInt())
+        }
         return null
+    }
+
+    private fun monthNumber(name: String): Int? {
+        val index = MONTHS.indexOf(name.take(3).lowercase())
+        return if (index >= 0) index + 1 else null
     }
 
     private fun toEpochDay(year: Int, month: Int, day: Int): Long? =

@@ -73,6 +73,10 @@ class AppFlowTest {
         compose.waitUntil(15_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
     }
 
+    private fun waitForNoTag(tag: String) {
+        compose.waitUntil(15_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty() }
+    }
+
     private fun waitForTotal(cents: Long) {
         val expected = money.format(cents)
         compose.waitUntil(15_000) {
@@ -96,6 +100,10 @@ class AppFlowTest {
         AppDatabase.get(context).categoryDao().getAll().associate { it.name to it.id }
     }
 
+    private fun paymentMethodNames(): Set<String> = runBlocking {
+        AppDatabase.get(context).paymentMethodDao().getAll().map { it.name }.toSet()
+    }
+
     private fun seed(vararg expenses: Triple<Long, String?, String>, daysAgo: (Int) -> Long = { 0 }) {
         val ids = categoryIds()
         val repo = ExpenseRepository(AppDatabase.get(context))
@@ -112,7 +120,13 @@ class AppFlowTest {
         compose.onNodeWithContentDescription(description).performClick()
     }
 
-    private fun addExpense(amount: String, classification: String, details: String, yesterday: Boolean = false) {
+    private fun addExpense(
+        amount: String,
+        classification: String,
+        details: String,
+        yesterday: Boolean = false,
+        paymentMethod: String? = null,
+    ) {
         compose.onNodeWithTag("addExpense").performClick()
         waitForTag("amount")
         compose.onNodeWithTag("amount").performTextInput(amount)
@@ -120,7 +134,17 @@ class AppFlowTest {
         // "Done" on the amount keyboard closes the keyboard, as it does for a person.
         compose.onNodeWithTag("amount").performScrollTo().performImeAction()
         if (yesterday) compose.onNodeWithText("Yesterday").performScrollTo().performClick()
-        compose.onNodeWithTag("pick-$classification").performScrollTo().performClick()
+        // Classification and payment method are each chosen from a list.
+        compose.onNodeWithTag("pickClassification").performScrollTo().performClick()
+        waitForTag("option-$classification")
+        compose.onNodeWithTag("option-$classification").performScrollTo().performClick()
+        waitForNoTag("option-new")
+        if (paymentMethod != null) {
+            compose.onNodeWithTag("pickPaymentMethod").performScrollTo().performClick()
+            waitForTag("option-$paymentMethod")
+            compose.onNodeWithTag("option-$paymentMethod").performScrollTo().performClick()
+            waitForNoTag("option-new")
+        }
     }
 
     // ---- tests ------------------------------------------------------------------
@@ -140,12 +164,15 @@ class AppFlowTest {
         waitForTag("addExpense")
 
         // Add: amount, classification from the list, details. The date defaults to today.
-        addExpense("250", "Food", "Lunch at cafe")
+        addExpense("250", "Food", "Lunch at cafe", paymentMethod = "UPI")
         compose.onNodeWithTag("amount").performScrollTo()
         screenshot("02-add-expense")
+        compose.onNodeWithTag("attachFile").performScrollTo()
+        screenshot("02b-add-expense-lower")
         compose.onNodeWithTag("saveExpense").performClick()
         waitForText("Lunch at cafe")
         waitForTotal(25000)
+        compose.onNode(hasTestTag("expenseRow") and hasText("Lunch at cafe") and hasText("UPI")).assertExists()
 
         // A second one, dated yesterday.
         addExpense("1200.5", "Transport", "Cab to airport", yesterday = true)
@@ -191,8 +218,8 @@ class AppFlowTest {
 
     @Test
     fun manageClassifications() {
-        waitForTag("tab-Classifications")
-        compose.onNodeWithTag("tab-Classifications").performClick()
+        waitForTag("tab-Lists")
+        compose.onNodeWithTag("tab-Lists").performClick()
         waitForText("Food")
 
         // Add a new one.
@@ -238,13 +265,30 @@ class AppFlowTest {
         waitForText("1 expense")
         tapInClassificationList("Delete Food")
         waitForText("Delete “Food”?")
-        waitForText("1 expense uses this classification. It will be kept and shown as “Uncategorized”.")
+        waitForText("1 expense uses this classification. It will be kept, shown as “Uncategorized”.")
         compose.onNodeWithText("Delete").performClick()
         waitForNoText("Delete “Food”?")
         compose.waitUntil(15_000) { "Food" !in categoryIds().keys }
         compose.onNodeWithTag("tab-Expenses").performClick()
         waitForText("Breakfast")
         compose.onNode(hasTestTag("expenseRow") and hasText("Uncategorized")).assertExists()
+
+        // Payment methods are a second list managed the same way.
+        compose.onNodeWithTag("tab-Lists").performClick()
+        waitForTag("toggle-Payment methods")
+        compose.onNodeWithTag("toggle-Payment methods").performClick()
+        waitForText("UPI")
+        compose.onNodeWithTag("addClassification").performClick()
+        waitForTag("classificationName")
+        compose.onNodeWithTag("classificationName").performTextInput("Wallet")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(15_000) { "Wallet" in paymentMethodNames() }
+        compose.onNodeWithTag("classificationList").performScrollToNode(hasTestTag("addClassification"))
+        screenshot("12-payment-methods")
+        tapInClassificationList("Delete Wallet")
+        waitForText("No expenses use this payment method.")
+        compose.onNodeWithText("Delete").performClick()
+        compose.waitUntil(15_000) { "Wallet" !in paymentMethodNames() }
     }
 
     @Test
@@ -260,6 +304,23 @@ class AppFlowTest {
         waitForText(money.format(35000))
         compose.onNode(hasTestTag("summaryRow") and hasText("Transport") and hasText(money.format(40000))).assertExists()
         compose.onNode(hasTestTag("summaryRow") and hasText("Food") and hasText("47% · 2 expenses")).assertExists()
+
+        // The same totals as percentages, by payment method, and for a custom range of dates.
+        compose.onNodeWithTag("toggle-Percentage").performClick()
+        compose.onNode(hasTestTag("summaryRow") and hasText("Food") and hasText("47%")).assertExists()
+        compose.onNode(hasTestTag("summaryRow") and hasText("Food") and hasText(money.format(35000) + " · 2 expenses")).assertExists()
+        compose.onNodeWithTag("toggle-By payment method").performClick()
+        compose.waitUntil(15_000) {
+            compose.onAllNodes(hasTestTag("summaryRow") and hasText("Not set") and hasText("100%")).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("toggle-Custom range").performClick()
+        waitForTag("rangeFrom")
+        waitForTotal(75000)
+        compose.onNodeWithTag("toggle-Month").performClick()
+        waitForTag("monthLabel")
+        compose.onNodeWithTag("toggle-By classification").performClick()
+        compose.onNodeWithTag("toggle-Amount").performClick()
+        waitForText("47% · 2 expenses")
 
         // Tapping a classification shows just its expenses.
         compose.onNode(hasTestTag("summaryRow") and hasText("Transport")).performClick()
@@ -289,8 +350,14 @@ class AppFlowTest {
         screenshot("04-expenses")
 
         compose.onNodeWithTag("tab-Summary").performClick()
-        waitForText("By classification")
+        waitForTag("toggle-By classification")
+        waitForTag("summaryRow")
         screenshot("06-summary")
+        compose.onNodeWithTag("toggle-Custom range").performClick()
+        waitForTag("rangeFrom")
+        compose.onNodeWithTag("toggle-Percentage").performClick()
+        screenshot("11-summary-range-percent")
+        compose.onNodeWithTag("toggle-Month").performClick()
 
         compose.onNodeWithTag("tab-Expenses").performClick()
         waitForTag("addExpense")

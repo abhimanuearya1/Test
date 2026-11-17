@@ -20,6 +20,8 @@ import io.github.abhimanuearya1.expensetracker.core.SearchIndex
 import io.github.abhimanuearya1.expensetracker.core.Summary
 import io.github.abhimanuearya1.expensetracker.core.TextTools
 import io.github.abhimanuearya1.expensetracker.data.AppDatabase
+import io.github.abhimanuearya1.expensetracker.data.AttachmentDraft
+import io.github.abhimanuearya1.expensetracker.data.AttachmentStore
 import io.github.abhimanuearya1.expensetracker.data.CategoryWithCount
 import io.github.abhimanuearya1.expensetracker.data.ExpenseRepository
 import io.github.abhimanuearya1.expensetracker.data.Settings
@@ -61,13 +63,20 @@ data class ExpensesUiState(
     val hasUncategorized: Boolean = false,
 )
 
-/** What the Summary tab shows. */
+/** What the Summary tab shows: either one month or a custom range of dates. */
 data class SummaryUiState(
     val loading: Boolean = true,
     val month: YearMonth,
+    /** True when [fromDay]..[toDay] was chosen by the user instead of a month. */
+    val customRange: Boolean = false,
+    val fromDay: Long = 0,
+    val toDay: Long = 0,
     val totalCents: Long = 0,
     val count: Int = 0,
+    /** Totals per classification. */
     val rows: List<CategoryTotal> = emptyList(),
+    /** Totals per payment method. */
+    val paymentRows: List<CategoryTotal> = emptyList(),
 )
 
 /** The expense form is open: either for a new expense or to change an existing one. */
@@ -81,6 +90,18 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
 
     private val repo = ExpenseRepository(AppDatabase.get(application))
     private val settings = Settings(application)
+    private val attachmentStore = AttachmentStore(application)
+
+    init {
+        // Tidy up copies of files that were added to a form but never saved.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                attachmentStore.deleteUnreferenced(repo.allAttachmentFileNames())
+            } catch (e: Exception) {
+                // Only housekeeping; try again next start.
+            }
+        }
+    }
 
     // ---- Currency -----------------------------------------------------------------
 
@@ -125,6 +146,39 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
             repo.deleteCategory(category.id)
             if (_filter.value == category.id) _filter.value = null
             _messages.send("Deleted “${category.name}”")
+        }
+    }
+
+    // ---- Payment methods ----------------------------------------------------------
+
+    /** All payment methods with their expense counts; null while loading. */
+    val paymentMethods: StateFlow<List<CategoryWithCount>?> = repo.observePaymentMethods()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun addPaymentMethod(name: String, color: Int, onAdded: (Long) -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                onAdded(repo.addPaymentMethod(name, color))
+            } catch (e: SQLiteConstraintException) {
+                _messages.send("That payment method already exists")
+            }
+        }
+    }
+
+    fun updatePaymentMethod(id: Long, name: String, color: Int) {
+        viewModelScope.launch {
+            try {
+                repo.updatePaymentMethod(id, name, color)
+            } catch (e: SQLiteConstraintException) {
+                _messages.send("That payment method already exists")
+            }
+        }
+    }
+
+    fun deletePaymentMethod(method: CategoryWithCount) {
+        viewModelScope.launch {
+            repo.deletePaymentMethod(method.id)
+            _messages.send("Deleted “${method.name}”")
         }
     }
 
@@ -229,22 +283,60 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ExpensesUiState(month = _month.value))
 
-    val summaryUi: StateFlow<SummaryUiState> = monthData
-        .map { data ->
-            if (data == null) {
-                SummaryUiState(month = _month.value)
+    /** Custom date range for the Summary tab as first day to last day, or null to follow the month. */
+    private val _summaryRange = MutableStateFlow<Pair<Long, Long>?>(null)
+
+    /** Switches the Summary between the selected month and a custom range (this month so far, to begin with). */
+    fun setSummaryCustomRange(enabled: Boolean) {
+        if (!enabled) {
+            _summaryRange.value = null
+        } else if (_summaryRange.value == null) {
+            _summaryRange.value = Dates.firstDay(_month.value) to
+                minOf(Dates.lastDay(_month.value), maxOf(Dates.today(), Dates.firstDay(_month.value)))
+        }
+    }
+
+    fun setSummaryFrom(day: Long) {
+        val current = _summaryRange.value ?: return
+        _summaryRange.value = day to maxOf(day, current.second)
+    }
+
+    fun setSummaryTo(day: Long) {
+        val current = _summaryRange.value ?: return
+        _summaryRange.value = minOf(day, current.first) to day
+    }
+
+    val summaryUi: StateFlow<SummaryUiState> = _summaryRange
+        .flatMapLatest { range ->
+            if (range == null) {
+                monthData.map { data ->
+                    if (data == null) {
+                        SummaryUiState(month = _month.value)
+                    } else {
+                        summaryOf(data.items).copy(
+                            month = data.month,
+                            fromDay = Dates.firstDay(data.month),
+                            toDay = Dates.lastDay(data.month),
+                        )
+                    }
+                }
             } else {
-                SummaryUiState(
-                    loading = false,
-                    month = data.month,
-                    totalCents = data.items.sumOf { it.amountCents },
-                    count = data.items.size,
-                    rows = Summary.totalsByCategory(data.items),
-                )
+                repo.observeBetween(range.first, range.second).map { items ->
+                    summaryOf(items).copy(customRange = true, fromDay = range.first, toDay = range.second)
+                }
             }
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SummaryUiState(month = _month.value))
+
+    private fun summaryOf(items: List<ExpenseItem>) = SummaryUiState(
+        loading = false,
+        month = _month.value,
+        totalCents = items.sumOf { it.amountCents },
+        count = items.size,
+        rows = Summary.totalsByCategory(items),
+        paymentRows = Summary.totalsByPaymentMethod(items),
+    )
 
     private fun matchesFilter(item: ExpenseItem, filter: Long?): Boolean = when (filter) {
         null -> true
@@ -258,25 +350,119 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
     var editing by mutableStateOf<Editing?>(null)
         private set
 
+    /** Supporting documents of the expense in the form, including ones just added. */
+    var editorAttachments by mutableStateOf<List<AttachmentDraft>>(emptyList())
+        private set
+
+    /** True once a document was added or removed in the form. */
+    var attachmentsChanged by mutableStateOf(false)
+        private set
+
+    private var pendingPhoto: String? = null
+
     fun startNewExpense() {
+        editorAttachments = emptyList()
+        attachmentsChanged = false
         editing = Editing.New
     }
 
     fun startEditing(item: ExpenseItem) {
+        editorAttachments = emptyList()
+        attachmentsChanged = false
         editing = Editing.Existing(item)
+        if (item.attachmentCount > 0) {
+            viewModelScope.launch {
+                val saved = repo.attachmentsOf(item.id)
+                val current = editing
+                if (current is Editing.Existing && current.item.id == item.id) {
+                    editorAttachments = saved + editorAttachments.filter { it.id == null }
+                }
+            }
+        }
     }
 
+    /** Closes the form without saving; files added in it are thrown away. */
     fun closeEditor() {
+        val unsaved = editorAttachments.filter { it.id == null }.map { it.fileName }
         editing = null
+        editorAttachments = emptyList()
+        deleteFiles(unsaved)
     }
+
+    private fun deleteFiles(fileNames: List<String>) {
+        if (fileNames.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) { fileNames.forEach(attachmentStore::delete) }
+    }
+
+    /** Copies the chosen files into the app and adds them to the form. */
+    fun addAttachments(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            var failed = 0
+            for (uri in uris) {
+                try {
+                    val draft = withContext(Dispatchers.IO) { attachmentStore.copyIn(uri) }
+                    if (editing != null) {
+                        editorAttachments = editorAttachments + draft
+                        attachmentsChanged = true
+                    } else {
+                        deleteFiles(listOf(draft.fileName))
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failed++
+                }
+            }
+            if (failed > 0) _messages.send("Could not attach ${TextTools.plural(failed, "file")}")
+        }
+    }
+
+    fun removeAttachment(draft: AttachmentDraft) {
+        editorAttachments = editorAttachments - draft
+        attachmentsChanged = true
+        if (draft.id == null) deleteFiles(listOf(draft.fileName))
+    }
+
+    /** Where the camera should save a new photo. Call [finishPhoto] when the camera returns. */
+    fun beginPhoto(): Uri {
+        val fileName = attachmentStore.newPhotoFileName()
+        pendingPhoto = fileName
+        return attachmentStore.uriFor(fileName)
+    }
+
+    fun finishPhoto(saved: Boolean) {
+        val fileName = pendingPhoto ?: return
+        pendingPhoto = null
+        if (saved && editing != null && attachmentStore.exists(fileName)) {
+            val number = editorAttachments.count { it.displayName.startsWith("Photo") } + 1
+            editorAttachments = editorAttachments + AttachmentDraft(null, fileName, "Photo $number.jpg", "image/jpeg")
+            attachmentsChanged = true
+        } else {
+            deleteFiles(listOf(fileName))
+        }
+    }
+
+    /** Address of an attached file that a viewer app can be allowed to read. */
+    fun attachmentUri(draft: AttachmentDraft): Uri = attachmentStore.uriFor(draft.fileName)
 
     /** Adds a new expense when [id] is null, otherwise updates that expense. */
-    fun saveExpense(id: Long?, amountCents: Long, epochDay: Long, categoryId: Long?, details: String) {
+    fun saveExpense(
+        id: Long?,
+        amountCents: Long,
+        epochDay: Long,
+        categoryId: Long?,
+        details: String,
+        paymentMethodId: Long?,
+    ) {
         if (id == null) listResetKey++
+        val attachments = editorAttachments
         editing = null
+        editorAttachments = emptyList()
         viewModelScope.launch {
             try {
-                repo.saveExpense(id, amountCents, epochDay, categoryId, details)
+                val removed = repo.saveExpense(id, amountCents, epochDay, categoryId, details, paymentMethodId, attachments)
+                deleteFiles(removed)
                 // Leave the list showing the expense that was just saved.
                 if (id == null) closeSearch()
                 if (!searching) _month.value = Dates.monthOf(epochDay)
@@ -291,9 +477,11 @@ class ExpenseViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun deleteExpense(id: Long) {
+        val unsaved = editorAttachments.filter { it.id == null }.map { it.fileName }
         editing = null
+        editorAttachments = emptyList()
         viewModelScope.launch {
-            repo.deleteExpense(id)
+            deleteFiles(repo.deleteExpense(id) + unsaved)
             _messages.send("Expense deleted")
         }
     }

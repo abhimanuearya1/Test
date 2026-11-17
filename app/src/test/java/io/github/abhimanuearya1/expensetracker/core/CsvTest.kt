@@ -58,7 +58,7 @@ class CsvBackupTest {
     private fun day(iso: String) = LocalDate.parse(iso).toEpochDay()
 
     private val sample = listOf(
-        BackupRow(day("2026-11-16"), "Food", 25000, "Lunch at cafe"),
+        BackupRow(day("2026-11-16"), "Food", 25000, "Lunch at cafe", "UPI"),
         BackupRow(day("2026-11-15"), "Transport", 4050, "Auto, to office"),
         BackupRow(day("2026-10-01"), "", 1200000, "Paid \"in cash\"\nsecond line"),
     )
@@ -66,8 +66,8 @@ class CsvBackupTest {
     @Test
     fun exportHasHeaderAndPlainValues() {
         val lines = CsvBackup.export(sample.take(1)).split("\r\n")
-        assertEquals("Date,Classification,Amount,Details", lines[0])
-        assertEquals("2026-11-16,Food,250.00,Lunch at cafe", lines[1])
+        assertEquals("Date,Classification,Amount,Details,Payment Method", lines[0])
+        assertEquals("2026-11-16,Food,250.00,Lunch at cafe,UPI", lines[1])
     }
 
     @Test

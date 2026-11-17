@@ -24,12 +24,18 @@ directories (JUnit 4 from Maven Central).
 ## Conventions
 
 - `core/` must stay free of Android imports so it remains testable on a plain JVM.
-- "Classification" on screen is `Category` in code.
+- "Classification" on screen is `Category` in code. Payment methods are a second
+  list of the same shape (`PaymentMethod`); both are edited on the Lists tab.
+- Attached documents are copied into `filesDir/attachments` by `AttachmentStore`
+  and shared with other apps only through the FileProvider. They are not in the CSV export.
+- `CsvBackup.parse` reads the app's own CSV and PhonePe statements. Never commit a
+  user's real statement; tests use made-up rows.
 - Amounts are `Long` hundredths (`amountCents`); dates are `LocalDate.toEpochDay()`.
 - UI strings are English and written in the Kotlin code.
 - Icons are vector paths in `ui/AppIcons.kt`; do not add an icon library.
 - Database changes need a higher `version` in `AppDatabase` plus a Room
-  `Migration`. Never use destructive migration: it erases the user's expenses.
+  `Migration`, and an on-device test that upgrades a hand-built old database
+  (see `Version21Test`). Never use destructive migration: it erases the user's expenses.
 - Keep the application id and `signing/expense-tracker.keystore` unchanged, or
   installed copies can no longer be updated in place.
 - On-device tests find nodes by `testTag`; keep the tags when changing screens.

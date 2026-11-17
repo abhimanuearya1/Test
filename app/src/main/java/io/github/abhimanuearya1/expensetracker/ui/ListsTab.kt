@@ -26,24 +26,42 @@ import androidx.compose.ui.unit.dp
 import io.github.abhimanuearya1.expensetracker.core.TextTools
 import io.github.abhimanuearya1.expensetracker.data.CategoryWithCount
 
-/** The list of classifications, where they are added, renamed, recoloured and deleted. */
+/**
+ * The two lists expenses are filed by — classifications and payment methods —
+ * where their entries are added, renamed, recoloured and deleted.
+ */
 @Composable
-fun ClassificationsTab(
-    categories: List<CategoryWithCount>?,
+fun ListsTab(
+    showPaymentMethods: Boolean,
+    onShowPaymentMethods: (Boolean) -> Unit,
+    entries: List<CategoryWithCount>?,
     onAdd: () -> Unit,
     onEdit: (CategoryWithCount) -> Unit,
     onDelete: (CategoryWithCount) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val noun = if (showPaymentMethods) "payment method" else "classification"
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("classificationList"),
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
+        item(key = "which") {
+            ChoiceToggle(
+                options = listOf("Classifications", "Payment methods"),
+                selectedIndex = if (showPaymentMethods) 1 else 0,
+                onSelect = { onShowPaymentMethods(it == 1) },
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            )
+        }
         item(key = "intro") {
             Text(
-                text = "Every expense is filed under one classification. Add your own, or tap one to rename it or change its colour.",
+                text = if (showPaymentMethods) {
+                    "How an expense was paid: cash, UPI, a particular card or account. Add your own, or tap one to rename it or change its colour."
+                } else {
+                    "Every expense is filed under one classification. Add your own, or tap one to rename it or change its colour."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
@@ -61,20 +79,20 @@ fun ClassificationsTab(
             ) {
                 Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("New classification")
+                Text("New $noun")
             }
         }
-        if (categories != null) {
-            if (categories.isEmpty()) {
+        if (entries != null) {
+            if (entries.isEmpty()) {
                 item(key = "empty") {
-                    EmptyMessage("No classifications yet", "Tap “New classification” above to create one.")
+                    EmptyMessage("Nothing here yet", "Tap “New $noun” above to create one.")
                 }
             } else {
-                items(categories, key = { it.id }) { category ->
-                    ClassificationRow(
-                        category = category,
-                        onEdit = { onEdit(category) },
-                        onDelete = { onDelete(category) },
+                items(entries, key = { it.id }) { entry ->
+                    EntryRow(
+                        entry = entry,
+                        onEdit = { onEdit(entry) },
+                        onDelete = { onDelete(entry) },
                     )
                 }
             }
@@ -83,7 +101,7 @@ fun ClassificationsTab(
 }
 
 @Composable
-private fun ClassificationRow(category: CategoryWithCount, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun EntryRow(entry: CategoryWithCount, onEdit: () -> Unit, onDelete: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -92,26 +110,26 @@ private fun ClassificationRow(category: CategoryWithCount, onEdit: () -> Unit, o
             .testTag("classificationRow"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CategoryBadge(name = category.name, color = category.color)
+        CategoryBadge(name = entry.name, color = entry.color)
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = category.name,
+                text = entry.name,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = if (category.expenseCount == 0) "Not used yet" else TextTools.plural(category.expenseCount, "expense"),
+                text = if (entry.expenseCount == 0) "Not used yet" else TextTools.plural(entry.expenseCount, "expense"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         IconButton(onClick = onEdit) {
-            Icon(AppIcons.Edit, contentDescription = "Edit ${category.name}")
+            Icon(AppIcons.Edit, contentDescription = "Edit ${entry.name}")
         }
         IconButton(onClick = onDelete) {
-            Icon(AppIcons.Delete, contentDescription = "Delete ${category.name}")
+            Icon(AppIcons.Delete, contentDescription = "Delete ${entry.name}")
         }
     }
 }

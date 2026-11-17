@@ -51,6 +51,15 @@ object Categories {
         Default("Other", 0xFF546E7A.toInt()),
     )
 
+    /** Payment methods created the first time the app starts. All can be renamed or deleted. */
+    val DEFAULT_PAYMENT_METHODS: List<Default> = listOf(
+        Default("Cash", 0xFF43A047.toInt()),
+        Default("UPI", 0xFF673AB7.toInt()),
+        Default("Credit card", 0xFFE53935.toInt()),
+        Default("Debit card", 0xFF1E88E5.toInt()),
+        Default("Net banking", 0xFF00897B.toInt()),
+    )
+
     /** Trims and collapses repeated spaces: "  Eating   out " -> "Eating out". */
     fun cleanName(raw: String): String =
         raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")

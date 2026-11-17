@@ -1,12 +1,15 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package io.github.abhimanuearya1.expensetracker.ui
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,10 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -35,61 +35,65 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.abhimanuearya1.expensetracker.core.Categories
 import io.github.abhimanuearya1.expensetracker.core.Dates
 import io.github.abhimanuearya1.expensetracker.core.Money
+import io.github.abhimanuearya1.expensetracker.data.AttachmentDraft
 import io.github.abhimanuearya1.expensetracker.data.CategoryWithCount
 
-private const val MILLIS_PER_DAY = 86_400_000L
 private const val MAX_DETAILS_LENGTH = 200
 
+/** Which of the form's pop-up lists and dialogs is open. Saved as its name. */
+private enum class FormDialog { None, Date, Classification, NewClassification, PaymentMethod, NewPaymentMethod, Delete, Discard }
+
 /**
- * Full-screen form to add an expense or change an existing one:
- * amount, date, classification (picked from the classification list) and details.
+ * Full-screen form to add an expense or change an existing one: amount, date,
+ * classification and payment method (each picked from its list), details, and
+ * supporting documents.
  */
 @Composable
 fun EditExpenseScreen(
     editing: Editing,
     categories: List<CategoryWithCount>,
-    onSave: (id: Long?, amountCents: Long, epochDay: Long, categoryId: Long?, details: String) -> Unit,
-    onDelete: (id: Long) -> Unit,
-    onClose: () -> Unit,
-    onAddCategory: (name: String, color: Int, onAdded: (Long) -> Unit) -> Unit,
+    paymentMethods: List<CategoryWithCount>,
+    viewModel: ExpenseViewModel,
 ) {
     val existing = (editing as? Editing.Existing)?.item
     val money = LocalMoney.current
+    val context = LocalContext.current
     val today = Dates.today()
+    val attachments = viewModel.editorAttachments
 
     var amountText by rememberSaveable { mutableStateOf(existing?.let { Money.toInputString(it.amountCents) } ?: "") }
     var epochDay by rememberSaveable { mutableStateOf(existing?.epochDay ?: today) }
     var categoryId by rememberSaveable { mutableStateOf(existing?.categoryId) }
+    var paymentMethodId by rememberSaveable { mutableStateOf(existing?.paymentMethodId) }
     var details by rememberSaveable { mutableStateOf(existing?.details ?: "") }
-
     var showProblems by rememberSaveable { mutableStateOf(false) }
-    var showDatePicker by rememberSaveable { mutableStateOf(false) }
-    var showDelete by rememberSaveable { mutableStateOf(false) }
-    var showDiscard by rememberSaveable { mutableStateOf(false) }
-    var showNewCategory by rememberSaveable { mutableStateOf(false) }
+    var dialog by rememberSaveable { mutableStateOf(FormDialog.None) }
+
+    val category = categories.firstOrNull { it.id == categoryId }
+    val paymentMethod = paymentMethods.firstOrNull { it.id == paymentMethodId }
 
     val cents = Money.parseToCents(amountText)
     val amountProblem = when {
@@ -98,29 +102,50 @@ fun EditExpenseScreen(
         cents == 0L -> "The amount must be more than zero"
         else -> null
     }
-    // An expense whose classification was deleted may stay uncategorised; anything else needs one.
+    // An expense that has no classification (imported, or its classification was
+    // deleted) may stay that way; a new expense needs one.
     val mustClassify = categories.isNotEmpty() && (existing == null || existing.categoryId != null)
     val classificationProblem = if (mustClassify && categoryId == null) "Choose a classification" else null
 
-    val changed = if (existing == null) {
-        amountText.isNotBlank() || details.isNotBlank() || categoryId != null
+    val changed = viewModel.attachmentsChanged || if (existing == null) {
+        amountText.isNotBlank() || details.isNotBlank() || categoryId != null || paymentMethodId != null
     } else {
         amountText != Money.toInputString(existing.amountCents) ||
             epochDay != existing.epochDay ||
             categoryId != existing.categoryId ||
+            paymentMethodId != existing.paymentMethodId ||
             details != existing.details
     }
 
     fun requestClose() {
-        if (changed) showDiscard = true else onClose()
+        if (changed) dialog = FormDialog.Discard else viewModel.closeEditor()
     }
 
     fun save() {
         if (cents != null && amountProblem == null && classificationProblem == null) {
-            onSave(existing?.id, cents, epochDay, categoryId, details)
+            viewModel.saveExpense(existing?.id, cents, epochDay, categoryId, details, paymentMethodId)
         } else {
             showProblems = true
         }
+    }
+
+    fun open(attachment: AttachmentDraft) {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(viewModel.attachmentUri(attachment), attachment.mimeType)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            viewModel.showMessage("No app on this phone can open ${attachment.displayName}")
+        }
+    }
+
+    // The system file picker and camera are used, so no permissions are needed.
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        viewModel.addAttachments(uris)
+    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        viewModel.finishPhoto(saved)
     }
 
     BackHandler { requestClose() }
@@ -144,7 +169,7 @@ fun EditExpenseScreen(
                 },
                 actions = {
                     if (existing != null) {
-                        IconButton(onClick = { showDelete = true }) {
+                        IconButton(onClick = { dialog = FormDialog.Delete }) {
                             Icon(AppIcons.Delete, contentDescription = "Delete expense")
                         }
                     }
@@ -203,7 +228,7 @@ fun EditExpenseScreen(
 
             SectionLabel("Date")
             OutlinedButton(
-                onClick = { showDatePicker = true },
+                onClick = { dialog = FormDialog.Date },
                 shape = MaterialTheme.shapes.extraSmall,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                 modifier = Modifier
@@ -235,25 +260,13 @@ fun EditExpenseScreen(
             }
 
             SectionLabel("Classification")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (category in categories) {
-                    key(category.id) {
-                        FilterChip(
-                            selected = categoryId == category.id,
-                            onClick = { categoryId = category.id },
-                            label = { Text(category.name) },
-                            leadingIcon = { ColorDot(category.color) },
-                            modifier = Modifier.testTag("pick-" + category.name),
-                        )
-                    }
-                }
-                AssistChip(
-                    onClick = { showNewCategory = true },
-                    label = { Text("New") },
-                    leadingIcon = { Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    modifier = Modifier.testTag("pick-new"),
-                )
-            }
+            PickerField(
+                value = category?.name,
+                color = category?.color,
+                placeholder = if (existing != null && existing.categoryId == null) Categories.UNCATEGORIZED else "Choose from the list",
+                onClick = { dialog = FormDialog.Classification },
+                modifier = Modifier.testTag("pickClassification"),
+            )
             if (showProblems && classificationProblem != null) {
                 Text(
                     text = classificationProblem,
@@ -262,6 +275,15 @@ fun EditExpenseScreen(
                     modifier = Modifier.padding(start = 16.dp, top = 4.dp),
                 )
             }
+
+            SectionLabel("Payment method")
+            PickerField(
+                value = paymentMethod?.name,
+                color = paymentMethod?.color,
+                placeholder = "Not set",
+                onClick = { dialog = FormDialog.PaymentMethod },
+                modifier = Modifier.testTag("pickPaymentMethod"),
+            )
 
             Spacer(Modifier.height(20.dp))
             OutlinedTextField(
@@ -276,63 +298,136 @@ fun EditExpenseScreen(
                     .fillMaxWidth()
                     .testTag("details"),
             )
+
+            SectionLabel("Supporting documents")
+            for (attachment in attachments) {
+                AttachmentRow(
+                    attachment = attachment,
+                    onOpen = { open(attachment) },
+                    onRemove = { viewModel.removeAttachment(attachment) },
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            // Any type: photos, PDFs, documents.
+                            filePicker.launch(arrayOf("*/*"))
+                        } catch (e: ActivityNotFoundException) {
+                            viewModel.showMessage("No app found for choosing files")
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("attachFile"),
+                ) {
+                    Icon(AppIcons.Attach, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Attach file", maxLines = 1)
+                }
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            camera.launch(viewModel.beginPhoto())
+                        } catch (e: ActivityNotFoundException) {
+                            viewModel.finishPhoto(false)
+                            viewModel.showMessage("No camera app found")
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("takePhoto"),
+                ) {
+                    Icon(AppIcons.Camera, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Take photo", maxLines = 1)
+                }
+            }
             Spacer(Modifier.height(16.dp))
         }
     }
 
-    if (showDatePicker) {
-        val pickerState = rememberDatePickerState(initialSelectedDateMillis = epochDay * MILLIS_PER_DAY)
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val picked = pickerState.selectedDateMillis
-                        if (picked != null) epochDay = Math.floorDiv(picked, MILLIS_PER_DAY)
-                        showDatePicker = false
-                    },
-                ) { Text("OK") }
+    when (dialog) {
+        FormDialog.None -> {}
+
+        FormDialog.Date -> DayPickerDialog(
+            epochDay = epochDay,
+            onPick = { epochDay = it },
+            onDismiss = { dialog = FormDialog.None },
+        )
+
+        FormDialog.Classification -> ChoiceListDialog(
+            title = "Classification",
+            options = categories,
+            selectedId = categoryId,
+            noneLabel = null,
+            newLabel = "New classification",
+            onPick = {
+                categoryId = it
+                dialog = FormDialog.None
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
-        ) {
-            DatePicker(state = pickerState)
-        }
-    }
-
-    if (showDelete && existing != null) {
-        ConfirmDialog(
-            title = "Delete this expense?",
-            text = money.format(existing.amountCents) + " · " +
-                (existing.categoryName ?: Categories.UNCATEGORIZED) + " · " + Dates.full(existing.epochDay),
-            confirmLabel = "Delete",
-            onConfirm = { onDelete(existing.id) },
-            onDismiss = { showDelete = false },
+            onNew = { dialog = FormDialog.NewClassification },
+            onDismiss = { dialog = FormDialog.None },
         )
-    }
 
-    if (showDiscard) {
-        ConfirmDialog(
-            title = if (existing == null) "Discard this expense?" else "Discard changes?",
-            text = "What you entered will not be saved.",
-            confirmLabel = "Discard",
-            onConfirm = onClose,
-            onDismiss = { showDiscard = false },
-            dismissLabel = "Keep editing",
-        )
-    }
-
-    if (showNewCategory) {
-        CategoryDialog(
+        FormDialog.NewClassification -> CategoryDialog(
             title = "New classification",
             initialName = "",
             initialColor = Categories.nextColor(categories.map { it.color }),
             existingNames = categories.map { it.name },
             renamingFrom = null,
-            onDismiss = { showNewCategory = false },
+            onDismiss = { dialog = FormDialog.None },
             onSave = { name, color ->
-                showNewCategory = false
-                onAddCategory(name, color) { newId -> categoryId = newId }
+                dialog = FormDialog.None
+                viewModel.addCategory(name, color) { newId -> categoryId = newId }
             },
+        )
+
+        FormDialog.PaymentMethod -> ChoiceListDialog(
+            title = "Payment method",
+            options = paymentMethods,
+            selectedId = paymentMethodId,
+            noneLabel = "Not set",
+            newLabel = "New payment method",
+            onPick = {
+                paymentMethodId = it
+                dialog = FormDialog.None
+            },
+            onNew = { dialog = FormDialog.NewPaymentMethod },
+            onDismiss = { dialog = FormDialog.None },
+        )
+
+        FormDialog.NewPaymentMethod -> CategoryDialog(
+            title = "New payment method",
+            initialName = "",
+            initialColor = Categories.nextColor(paymentMethods.map { it.color }),
+            existingNames = paymentMethods.map { it.name },
+            renamingFrom = null,
+            onDismiss = { dialog = FormDialog.None },
+            onSave = { name, color ->
+                dialog = FormDialog.None
+                viewModel.addPaymentMethod(name, color) { newId -> paymentMethodId = newId }
+            },
+        )
+
+        FormDialog.Delete -> if (existing != null) {
+            ConfirmDialog(
+                title = "Delete this expense?",
+                text = money.format(existing.amountCents) + " · " +
+                    (existing.categoryName ?: Categories.UNCATEGORIZED) + " · " + Dates.full(existing.epochDay),
+                confirmLabel = "Delete",
+                onConfirm = { viewModel.deleteExpense(existing.id) },
+                onDismiss = { dialog = FormDialog.None },
+            )
+        }
+
+        FormDialog.Discard -> ConfirmDialog(
+            title = if (existing == null) "Discard this expense?" else "Discard changes?",
+            text = "What you entered will not be saved.",
+            confirmLabel = "Discard",
+            onConfirm = { viewModel.closeEditor() },
+            onDismiss = { dialog = FormDialog.None },
+            dismissLabel = "Keep editing",
         )
     }
 }
@@ -345,4 +440,35 @@ private fun SectionLabel(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
     )
+}
+
+/** One attached file: tap the name to open it, the cross to remove it. */
+@Composable
+private fun AttachmentRow(attachment: AttachmentDraft, onOpen: () -> Unit, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "Open", onClick = onOpen)
+            .padding(start = 4.dp)
+            .testTag("attachment"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            AppIcons.Attach,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = attachment.displayName,
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onRemove) {
+            Icon(AppIcons.Close, contentDescription = "Remove ${attachment.displayName}")
+        }
+    }
 }

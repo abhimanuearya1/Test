@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 
 package io.github.abhimanuearya1.expensetracker.ui
 
@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +25,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +69,7 @@ import io.github.abhimanuearya1.expensetracker.core.Categories
 import io.github.abhimanuearya1.expensetracker.core.Dates
 import io.github.abhimanuearya1.expensetracker.core.MoneyFormatter
 import io.github.abhimanuearya1.expensetracker.core.TextTools
+import io.github.abhimanuearya1.expensetracker.data.CategoryWithCount
 import java.time.YearMonth
 import java.util.Currency
 
@@ -334,5 +345,158 @@ private fun CurrencyRow(label: String, selected: Boolean, onClick: () -> Unit) {
     ) {
         RadioButton(selected = selected, onClick = null)
         Text(text = label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 12.dp))
+    }
+}
+
+private const val MILLIS_PER_DAY = 86_400_000L
+
+/** Calendar dialog for choosing one day. */
+@Composable
+fun DayPickerDialog(epochDay: Long, onPick: (Long) -> Unit, onDismiss: () -> Unit) {
+    val pickerState = rememberDatePickerState(initialSelectedDateMillis = epochDay * MILLIS_PER_DAY)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val picked = pickerState.selectedDateMillis
+                    if (picked != null) onPick(Math.floorDiv(picked, MILLIS_PER_DAY))
+                    onDismiss()
+                },
+            ) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    ) {
+        DatePicker(state = pickerState)
+    }
+}
+
+/** A row of joined buttons of which exactly one is selected, e.g. "Month | Custom range". */
+@Composable
+fun ChoiceToggle(
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SingleChoiceSegmentedButtonRow(modifier = modifier.fillMaxWidth()) {
+        options.forEachIndexed { index, label ->
+            SegmentedButton(
+                selected = index == selectedIndex,
+                onClick = { onSelect(index) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+                modifier = Modifier.testTag("toggle-$label"),
+                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+        }
+    }
+}
+
+/**
+ * Looks like a text box but opens a list to choose from when tapped. Shows the
+ * chosen entry with its colour, or [placeholder] when nothing is chosen.
+ */
+@Composable
+fun PickerField(
+    value: String?,
+    color: Int?,
+    placeholder: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.extraSmall,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        if (value != null) {
+            ColorDot(color, size = 14.dp)
+            Spacer(Modifier.width(12.dp))
+        }
+        Text(
+            text = value ?: placeholder,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (value != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(AppIcons.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * The list a [PickerField] opens: every classification or payment method, one
+ * tap to choose, plus an entry to create a new one.
+ *
+ * @param noneLabel shown as a first entry that clears the choice, or null if a choice is required.
+ */
+@Composable
+fun ChoiceListDialog(
+    title: String,
+    options: List<CategoryWithCount>,
+    selectedId: Long?,
+    noneLabel: String?,
+    newLabel: String,
+    onPick: (Long?) -> Unit,
+    onNew: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                if (noneLabel != null) {
+                    ChoiceRow(label = noneLabel, color = null, showDot = false, selected = selectedId == null, tag = "option-none") {
+                        onPick(null)
+                    }
+                }
+                for (option in options) {
+                    ChoiceRow(
+                        label = option.name,
+                        color = option.color,
+                        showDot = true,
+                        selected = option.id == selectedId,
+                        tag = "option-" + option.name,
+                    ) { onPick(option.id) }
+                }
+                TextButton(onClick = onNew, modifier = Modifier.testTag("option-new")) {
+                    Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(newLabel)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ChoiceRow(
+    label: String,
+    color: Int?,
+    showDot: Boolean,
+    selected: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(vertical = 4.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(12.dp))
+        if (showDot) {
+            ColorDot(color, size = 14.dp)
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text = label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

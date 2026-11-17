@@ -32,6 +32,7 @@ class SearchIndex(
             val text = listOf(
                 item.details,
                 item.categoryName ?: Categories.UNCATEGORIZED,
+                item.paymentMethodName.orEmpty(),
                 Money.toPlainString(item.amountCents),
                 formatAmount(item.amountCents),
                 date.toString(),

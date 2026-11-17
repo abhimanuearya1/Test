@@ -48,6 +48,18 @@ object Summary {
             .sortedWith(compareByDescending<CategoryTotal> { it.totalCents }.thenBy { it.name ?: "￿" })
     }
 
+    /** Totals per payment method, largest first. Expenses without one are grouped under a null name. */
+    fun totalsByPaymentMethod(items: List<ExpenseItem>): List<CategoryTotal> =
+        totalsByCategory(
+            items.map {
+                it.copy(
+                    categoryId = it.paymentMethodId,
+                    categoryName = it.paymentMethodName,
+                    categoryColor = it.paymentMethodColor,
+                )
+            }
+        )
+
     /** "45%", "<1%" for small non-zero shares. */
     fun percentText(share: Float): String {
         val percent = Math.round(share * 100)

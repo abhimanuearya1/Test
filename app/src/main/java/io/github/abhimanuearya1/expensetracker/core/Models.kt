@@ -2,7 +2,7 @@ package io.github.abhimanuearya1.expensetracker.core
 
 /**
  * One expense as shown in lists: the stored row plus the name and colour of its
- * classification. Both are null when the expense has no classification.
+ * classification and payment method. Those are null when the expense has none.
  *
  * Everything in the `core` package is plain Kotlin with no Android imports, so it
  * can be unit-tested on any JVM.
@@ -17,4 +17,9 @@ data class ExpenseItem(
     val details: String,
     val categoryName: String?,
     val categoryColor: Int?,
+    val paymentMethodId: Long? = null,
+    val paymentMethodName: String? = null,
+    val paymentMethodColor: Int? = null,
+    /** Number of supporting documents attached. */
+    val attachmentCount: Int = 0,
 )

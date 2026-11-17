@@ -20,7 +20,11 @@ expenses, because every build is signed with the same key.
 ## Using it
 
 - **Add an expense**: tap **Add expense**, type the amount, pick the date
-  (today by default), choose a classification, and optionally write details.
+  (today by default), choose a classification and a payment method from their
+  lists, and optionally write details.
+- **Supporting documents**: on the same form, **Attach file** adds photos, PDFs
+  or any other file, and **Take photo** uses the camera. The app keeps its own
+  copy; tap an attached file to open it.
 - **Change or delete**: tap an expense in the list.
 - **Months**: the arrows at the top move between months; tap the month name to
   jump back to the current month.
@@ -28,16 +32,22 @@ expenses, because every build is signed with the same key.
 - **Search**: the magnifier searches every month at once. Type part of the
   details, a classification, an amount (`250`) or a date (`16 nov`). Several
   words narrow the result.
-- **Summary**: the middle tab totals the month by classification. Tap a row to
-  see those expenses.
-- **Classifications**: the last tab is the list you choose from when adding an
-  expense. Add your own, rename them, change their colour or delete them.
-  Deleting a classification keeps its expenses; they show as *Uncategorized*.
+- **Summary**: the middle tab totals a month, or any **custom range** of dates,
+  by classification or by payment method, and shows each as an amount and as a
+  percentage of the total.
+- **Lists**: the last tab holds the two lists you choose from when adding an
+  expense: classifications and payment methods. Add your own, rename them,
+  change their colour or delete them. Deleting an entry keeps its expenses;
+  they show as *Uncategorized* (or without a payment method).
 - **⋮ menu**
   - **Export to CSV file** saves all expenses to a file that opens in Excel or
     Google Sheets. It is also your backup.
   - **Import from CSV file** reads such a file back. Expenses already in the
     app are skipped, so importing the same file twice is harmless.
+    It also reads a **PhonePe statement** saved as CSV: each payment becomes an
+    expense with its date, amount and details, the payment method is taken from
+    the "Credit/debit instrument" column, and the classification is left for
+    you to fill in. Money received is skipped.
   - **Currency** picks the symbol amounts are shown with (by default it follows
     the phone's region).
 
