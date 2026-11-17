@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -28,13 +30,16 @@ import io.github.abhimanuearya1.expensetracker.data.CategoryWithCount
 @Composable
 fun ClassificationsTab(
     categories: List<CategoryWithCount>?,
+    onAdd: () -> Unit,
     onEdit: (CategoryWithCount) -> Unit,
     onDelete: (CategoryWithCount) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 96.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("classificationList"),
+        contentPadding = PaddingValues(bottom = 24.dp),
     ) {
         item(key = "intro") {
             Text(
@@ -44,10 +49,25 @@ fun ClassificationsTab(
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
             )
         }
+        // A button in the list rather than a floating one, so nothing covers the
+        // edit and delete icons of the rows below.
+        item(key = "add") {
+            FilledTonalButton(
+                onClick = onAdd,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .testTag("addClassification"),
+            ) {
+                Icon(AppIcons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("New classification")
+            }
+        }
         if (categories != null) {
             if (categories.isEmpty()) {
                 item(key = "empty") {
-                    EmptyMessage("No classifications yet", "Tap “New classification” to create one.")
+                    EmptyMessage("No classifications yet", "Tap “New classification” above to create one.")
                 }
             } else {
                 items(categories, key = { it.id }) { category ->

@@ -3,8 +3,9 @@ package io.github.abhimanuearya1.expensetracker
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -24,6 +26,8 @@ import io.github.abhimanuearya1.expensetracker.core.MoneyFormatter
 import io.github.abhimanuearya1.expensetracker.data.AppDatabase
 import io.github.abhimanuearya1.expensetracker.data.ExpenseRepository
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
@@ -102,6 +106,12 @@ class AppFlowTest {
         }
     }
 
+    /** Scrolls the classification list until the icon with this description is on screen, then taps it. */
+    private fun tapInClassificationList(description: String) {
+        compose.onNodeWithTag("classificationList").performScrollToNode(hasContentDescription(description))
+        compose.onNodeWithContentDescription(description).performClick()
+    }
+
     private fun addExpense(amount: String, classification: String, details: String, yesterday: Boolean = false) {
         compose.onNodeWithTag("addExpense").performClick()
         waitForTag("amount")
@@ -131,6 +141,7 @@ class AppFlowTest {
 
         // Add: amount, classification from the list, details. The date defaults to today.
         addExpense("250", "Food", "Lunch at cafe")
+        compose.onNodeWithTag("amount").performScrollTo()
         screenshot("02-add-expense")
         compose.onNodeWithTag("saveExpense").performClick()
         waitForText("Lunch at cafe")
@@ -189,7 +200,7 @@ class AppFlowTest {
         waitForTag("classificationName")
         compose.onNodeWithTag("classificationName").performTextInput("Pets")
         compose.onNodeWithText("Save").performClick()
-        waitForText("Pets")
+        compose.waitUntil(15_000) { "Pets" in categoryIds().keys }
 
         // A name that already exists (in any letter case) is refused.
         compose.onNodeWithTag("addClassification").performClick()
@@ -200,29 +211,37 @@ class AppFlowTest {
         compose.onNodeWithText("Cancel").performClick()
 
         // Rename and recolour.
-        compose.onNodeWithContentDescription("Edit Pets").performClick()
-        waitForTag("classificationName")
+        tapInClassificationList("Edit Pets")
+        waitForText("Edit classification")
+        compose.onNodeWithTag("classificationName").assertTextContains("Pets")
         compose.onNodeWithTag("classificationName").performTextReplacement("Pet care")
         compose.onNodeWithContentDescription("Teal").performClick()
         screenshot("08-edit-classification")
         compose.onNodeWithText("Save").performClick()
         waitForText("Pet care")
-        waitForNoText("Pets")
+        assertTrue("Pet care" in categoryIds().keys)
+        assertFalse("Pets" in categoryIds().keys)
+        compose.onNodeWithTag("classificationList").performScrollToNode(hasTestTag("addClassification"))
         screenshot("07-classifications")
 
         // Delete an unused one.
-        compose.onNodeWithContentDescription("Delete Pet care").performClick()
+        tapInClassificationList("Delete Pet care")
+        waitForText("Delete “Pet care”?")
         waitForText("No expenses use this classification.")
         compose.onNodeWithText("Delete").performClick()
-        waitForNoText("Pet care")
+        waitForNoText("Delete “Pet care”?")
+        compose.waitUntil(15_000) { "Pet care" !in categoryIds().keys }
 
         // Deleting one that is in use keeps the expense, now shown as Uncategorized.
         seed(Triple(5000L, "Food", "Breakfast"))
+        compose.onNodeWithTag("classificationList").performScrollToNode(hasContentDescription("Delete Food"))
         waitForText("1 expense")
-        compose.onNodeWithContentDescription("Delete Food").performClick()
+        tapInClassificationList("Delete Food")
         waitForText("Delete “Food”?")
+        waitForText("1 expense uses this classification. It will be kept and shown as “Uncategorized”.")
         compose.onNodeWithText("Delete").performClick()
-        waitForNoText("Food")
+        waitForNoText("Delete “Food”?")
+        compose.waitUntil(15_000) { "Food" !in categoryIds().keys }
         compose.onNodeWithTag("tab-Expenses").performClick()
         waitForText("Breakfast")
         compose.onNode(hasTestTag("expenseRow") and hasText("Uncategorized")).assertExists()

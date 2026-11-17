@@ -223,22 +223,13 @@ private fun MainScreen(
             }
         },
         floatingActionButton = {
-            if (!searching) {
-                if (tab == MainTab.Classifications) {
-                    ExtendedFloatingActionButton(
-                        text = { Text("New classification") },
-                        icon = { Icon(AppIcons.Add, contentDescription = null) },
-                        onClick = { categoryDialog = CategoryDialogTarget.New },
-                        modifier = Modifier.testTag("addClassification"),
-                    )
-                } else {
-                    ExtendedFloatingActionButton(
-                        text = { Text("Add expense") },
-                        icon = { Icon(AppIcons.Add, contentDescription = null) },
-                        onClick = viewModel::startNewExpense,
-                        modifier = Modifier.testTag("addExpense"),
-                    )
-                }
+            if (!searching && tab != MainTab.Classifications) {
+                ExtendedFloatingActionButton(
+                    text = { Text("Add expense") },
+                    icon = { Icon(AppIcons.Add, contentDescription = null) },
+                    onClick = viewModel::startNewExpense,
+                    modifier = Modifier.testTag("addExpense"),
+                )
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -275,6 +266,7 @@ private fun MainScreen(
 
             MainTab.Classifications -> ClassificationsTab(
                 categories = categories,
+                onAdd = { categoryDialog = CategoryDialogTarget.New },
                 onEdit = { categoryDialog = CategoryDialogTarget.Edit(it) },
                 onDelete = { deleteTarget = it },
                 modifier = Modifier.padding(padding),
