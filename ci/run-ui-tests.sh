@@ -19,5 +19,28 @@ adb pull "$SHOTS" screenshots || echo "No screenshots were taken"
 if [ "$status" -ne 0 ]; then
   echo "===== App crashes and test runner messages from the device log ====="
   adb logcat -d -v brief AndroidRuntime:E TestRunner:I '*:S' | tail -n 200
+  exit "$status"
 fi
-exit "$status"
+
+# The tests above use the debug build. The APK people install is the optimized
+# release build, so start that one too and check that its first screen appears
+# with the classifications loaded from the database.
+APP=io.github.abhimanuearya1.expensetracker
+./gradlew assembleRelease || exit 1
+adb install -r app/build/outputs/apk/release/app-release.apk || exit 1
+adb logcat -c
+adb shell am start -W -n "$APP/.MainActivity"
+sleep 10
+adb shell uiautomator dump /sdcard/release-screen.xml >/dev/null
+screen=$(adb shell cat /sdcard/release-screen.xml)
+if adb shell pidof "$APP" >/dev/null \
+    && echo "$screen" | grep -q "Add expense" \
+    && echo "$screen" | grep -q "Bills"; then
+  echo "Release build starts and shows its first screen."
+  adb shell screencap -p /sdcard/release-build.png && adb pull /sdcard/release-build.png screenshots/10-release-build.png
+else
+  echo "===== The release build did not start correctly ====="
+  adb logcat -d -v brief AndroidRuntime:E '*:S' | tail -n 100
+  echo "$screen" | head -c 2000
+  exit 1
+fi
