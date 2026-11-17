@@ -266,6 +266,7 @@ class AppFlowTest {
         // Deleting one that is in use keeps the expense, now shown as Uncategorized.
         seed(Triple(5000L, "Food", "Breakfast"))
         compose.onNodeWithTag("classificationList").performScrollToNode(hasContentDescription("Delete Food"))
+        screenshot("13-food-in-use")
         waitForText("1 expense")
         tapInClassificationList("Delete Food")
         waitForText("Delete “Food”?")
