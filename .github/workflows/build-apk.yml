@@ -141,6 +141,11 @@ jobs:
             rm -rf docs/screenshots
             python3 ci/shrink-screenshots.py downloaded/screenshots docs/screenshots
           fi
+          # When the on-device tests fail, their error messages are published next to the screenshots.
+          if [ -f downloaded/screenshots/failures.txt ]; then
+            mkdir -p docs/screenshots
+            cp downloaded/screenshots/failures.txt docs/screenshots/failures.txt
+          fi
 
       - name: Commit and push
         run: |

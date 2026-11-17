@@ -17,6 +17,8 @@ rm -rf screenshots
 adb pull "$SHOTS" screenshots || echo "No screenshots were taken"
 
 if [ "$status" -ne 0 ]; then
+  mkdir -p screenshots
+  python3 ci/summarize-test-failures.py screenshots/failures.txt
   echo "===== App crashes and test runner messages from the device log ====="
   adb logcat -d -v brief AndroidRuntime:E TestRunner:I '*:S' | tail -n 200
   exit "$status"
@@ -40,7 +42,7 @@ if adb shell pidof "$APP" >/dev/null \
   adb shell screencap -p /sdcard/release-build.png && adb pull /sdcard/release-build.png screenshots/10-release-build.png
 else
   echo "===== The release build did not start correctly ====="
-  adb logcat -d -v brief AndroidRuntime:E '*:S' | tail -n 100
-  echo "$screen" | head -c 2000
+  mkdir -p screenshots
+  { echo "The release build did not start correctly."; adb logcat -d -v brief AndroidRuntime:E '*:S' | tail -n 60; echo "$screen" | head -c 1500; } | tee screenshots/failures.txt
   exit 1
 fi
