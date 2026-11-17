@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown for a moment while the app starts; matches the app's background (see ui/Theme.kt). -->
+    <color name="window_background">#F4FBFA</color>
+    <color name="ic_launcher_background">#00696B</color>
+</resources>

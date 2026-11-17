@@ -1,0 +1,59 @@
+package io.github.abhimanuearya1.expensetracker.data
+
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+/**
+ * A classification the user can assign to expenses ("Food", "Transport", ...).
+ * Called "classification" on screen and "category" in the code.
+ */
+@Entity(
+    tableName = "categories",
+    indices = [Index(value = ["name"], unique = true)],
+)
+data class Category(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Unique without regard to upper/lower case. */
+    @ColumnInfo(collate = ColumnInfo.NOCASE) val name: String,
+    /** ARGB colour used for this classification's badge and chart bar. */
+    val color: Int,
+)
+
+/**
+ * A single expense.
+ *
+ * Deleting a classification keeps its expenses: their [categoryId] becomes null
+ * and they are shown as "Uncategorized".
+ */
+@Entity(
+    tableName = "expenses",
+    foreignKeys = [
+        ForeignKey(
+            entity = Category::class,
+            parentColumns = ["id"],
+            childColumns = ["categoryId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
+    ],
+    indices = [Index("categoryId"), Index("epochDay")],
+)
+data class Expense(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Amount in hundredths of the currency unit, so sums are exact. */
+    val amountCents: Long,
+    /** Calendar date as days since 1970-01-01 (LocalDate.toEpochDay). */
+    val epochDay: Long,
+    val categoryId: Long?,
+    val details: String,
+)
+
+/** A classification together with how many expenses use it. */
+data class CategoryWithCount(
+    val id: Long,
+    val name: String,
+    val color: Int,
+    val expenseCount: Int,
+)

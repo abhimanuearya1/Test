@@ -1,12 +1,29 @@
-name: Build debug APK
+name: Build APK
+
+# Every push: builds the installable APK, runs the unit tests, and runs the app
+# on an Android emulator. The APK is attached to the run under "Artifacts".
+#
+# Run manually with "publish" ticked to also commit the tested APK (apk/) and
+# fresh emulator screenshots (docs/screenshots/) to the branch.
 
 on:
   push:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Commit the tested APK and new screenshots to this branch
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    name: Build APK and run unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -16,13 +33,125 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.14.3
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Build optimized APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Report APK size
+        run: |
+          size=$(stat -c %s app/build/outputs/apk/release/app-release.apk)
+          echo "APK size: $size bytes ($((size / 1024)) KB)"
+          echo "APK size: $((size / 1024)) KB" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: expense-tracker-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: expense-tracker-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  ui-test:
+    name: Run the app on an emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable hardware acceleration for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: On-device tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          profile: pixel_5
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash ci/run-ui-tests.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-screenshots
+          path: screenshots
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-test-report
+          path: app/build/reports/androidTests
+          if-no-files-found: ignore
+
+  publish:
+    name: Commit APK and screenshots to the branch
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish }}
+    needs: [build, ui-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: expense-tracker-apk
+          path: downloaded/apk
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: emulator-screenshots
+          path: downloaded/screenshots
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Collect files
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          UI_TEST_RESULT: ${{ needs.ui-test.result }}
+        run: |
+          # The APK is only published when it was built and the app passed its on-device tests.
+          if [ "$BUILD_RESULT" = "success" ] && [ "$UI_TEST_RESULT" = "success" ] && [ -f downloaded/apk/app-release.apk ]; then
+            mkdir -p apk
+            cp downloaded/apk/app-release.apk apk/ExpenseTracker.apk
+          else
+            echo "APK not published (build: $BUILD_RESULT, on-device tests: $UI_TEST_RESULT)"
+          fi
+          if ls downloaded/screenshots/*.png >/dev/null 2>&1; then
+            pip install --quiet pillow
+            rm -rf docs/screenshots
+            python3 ci/shrink-screenshots.py downloaded/screenshots docs/screenshots
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -d apk ] && git add -A apk
+          [ -d docs/screenshots ] && git add -A docs/screenshots
+          if git diff --cached --quiet; then
+            echo "Nothing new to publish"
+          else
+            git commit -m "Publish APK and screenshots from build ${GITHUB_SHA::7}"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
