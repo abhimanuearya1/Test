@@ -1,13 +1,7 @@
-io.github.abhimanuearya1.expensetracker.AppFlowTest.summaryAndClassificationFilter
-    androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 15000 ms
-    at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:441)
-    at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:306)
-    at io.github.abhimanuearya1.expensetracker.AppFlowTest.summaryAndClassificationFilter(AppFlowTest.kt:313)
-
 io.github.abhimanuearya1.expensetracker.AppFlowTest.manageClassifications
     androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 15000 ms
     at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:441)
     at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:306)
     at io.github.abhimanuearya1.expensetracker.AppFlowTest.waitForText(AppFlowTest.kt:65)
-    at io.github.abhimanuearya1.expensetracker.AppFlowTest.manageClassifications(AppFlowTest.kt:289)
+    at io.github.abhimanuearya1.expensetracker.AppFlowTest.manageClassifications(AppFlowTest.kt:269)
 
