@@ -116,6 +116,10 @@ class AppFlowTest {
 
     /** Scrolls the classification list until the icon with this description is on screen, then taps it. */
     private fun tapInClassificationList(description: String) {
+        // Confirmation messages ("Deleted …") appear over the bottom of the list for a few seconds.
+        compose.waitUntil(30_000) {
+            compose.onAllNodes(hasText("Deleted", substring = true)).fetchSemanticsNodes().isEmpty()
+        }
         compose.onNodeWithTag("classificationList").performScrollToNode(hasContentDescription(description))
         compose.onNodeWithContentDescription(description).performClick()
     }

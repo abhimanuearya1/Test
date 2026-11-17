@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -211,6 +212,8 @@ private fun TotalRow(row: CategoryTotal, nameIfNone: String, percentFirst: Boole
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // Read out as one item (name, amount, percentage) whether or not the row can be tapped.
+            .semantics(mergeDescendants = true) { }
             .then(if (onClick != null) Modifier.clickable(onClickLabel = "Show these expenses", onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 10.dp)
             .testTag("summaryRow"),

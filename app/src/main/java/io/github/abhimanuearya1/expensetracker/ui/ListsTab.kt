@@ -45,7 +45,8 @@ fun ListsTab(
         modifier = modifier
             .fillMaxSize()
             .testTag("classificationList"),
-        contentPadding = PaddingValues(bottom = 24.dp),
+        // Room to scroll the last rows clear of the confirmation message shown at the bottom.
+        contentPadding = PaddingValues(bottom = 96.dp),
     ) {
         item(key = "which") {
             ChoiceToggle(
